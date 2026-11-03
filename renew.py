@@ -62,6 +62,28 @@ def renew_one(token, kind, oid):
     path = "/bots/{}/renew".format(oid) if kind == "Bot" else "/sites/{}/renew".format(oid)
     status, body = http(path, method="POST", token=token)
     return (status == 200), status, body
+def _short_error(status, body):
+    """把续期失败的原始返回压成一句人话，不把整段 JSON 原样发通知。
+
+    captcha_required 是唯一需要翻译的：平台要求在面板里人工确认，
+    自动续期过不了。其他错误只保留简短原因，截断到 60 字以内。
+    """
+    text = (body or "").strip()
+    try:
+        data = json.loads(text)
+        code = data.get("code") if isinstance(data, dict) else None
+        detail = data.get("detail") if isinstance(data, dict) else None
+    except (json.JSONDecodeError, AttributeError):
+        code, detail = None, None
+    if code == "captcha_required":
+        return "需在面板手动确认（验证码），自动续期被拦"
+    if detail:
+        return " ".join(str(detail).split())[:60]
+    if text:
+        return "HTTP {} {}".format(status, " ".join(text.split())[:60])
+    return "HTTP {}".format(status)
+
+
 def _report(level, title, content, details):
     """上报 notify-gateway；失败只打日志，不阻断续期主流程。"""
     try:
@@ -79,7 +101,7 @@ def main():
     # 0) 验证 token 有效性
     status, body = http("/auth/me", token=token)
     if status == 401:
-        title = "⚠️ MWS token 已失效 ({})".format(now_str())
+        title = "MWS token 已失效 ({})".format(now_str())
         content = ("请重新登录 cloud.m-ws.cc，F12 抓取 __Host-mrtcloud_token，"
                    "更新到 GitHub Secret MWS_TOKEN")
         print(title)
@@ -97,41 +119,49 @@ def main():
     # 1) 拉取并续期
     items = collect(token)
     if not items:
-        title = "MWS 续期报告 ({}) · 无对象".format(now_str())
+        title = "MWS 续期报告 ({})".format(now_str())
         print(title)
         _report("success", title, "账号下没有 Bot / Site，跳过。", None)
         return
-    lines = []
     failed = 0
     detail_items = []
+    failure_reasons = []
     for kind, oid, name, rem in items:
         if oid is None:
-            lines.append("  · {} {}：列表获取失败".format(kind, name))
             detail_items.append({"id": "unknown", "name": name, "status": "failed",
                                  "error": "列表获取失败"})
+            failure_reasons.append("列表获取失败")
             failed += 1
             continue
         ok, status, body = renew_one(token, kind, oid)
         rem_txt = "，续期前剩 {}h".format(int(rem)) if rem is not None else ""
         if ok:
-            lines.append("  · {} {}：续期成功{}".format(kind, name, rem_txt))
             msg = rem_txt.strip().lstrip("，") if rem is not None else ""
             detail_items.append({"id": str(oid), "name": name, "status": "success",
                                  "message": msg})
             print("[✓] {} {} (id:{}) 续期成功{}".format(kind, name, oid, rem_txt))
         else:
-            lines.append("  · {} {}：续期失败 HTTP {} {}".format(kind, name, status, body.strip()))
+            short = _short_error(status, body)
             detail_items.append({"id": str(oid), "name": name, "status": "failed",
-                                 "error": "HTTP {} {}".format(status, body.strip())})
+                                 "error": short})
+            failure_reasons.append(short)
             failed += 1
-            print("[✗] {} {} (id:{}) 续期失败 HTTP {}".format(kind, name, oid, status))
-    # 2) 汇总 + 通知
+            print("[✗] {} {} (id:{}) 续期失败：{}".format(kind, name, oid, short))
+    # 2) 汇总 + 通知：通知正文只写汇总和下一步，不再逐项重复；
+    # 逐项明细由网关按 details 渲染一次，避免同一份失败出现两遍、
+    # 原始 JSON 也只留在 Actions 日志里，不进通知。
     total = len(items)
     success = total - failed
     level = "success" if failed == 0 else "partial"
-    status_word = "完成" if failed == 0 else "部分失败"
-    title = "MWS 续期报告 ({}) · {}".format(now_str(), status_word)
-    content = "\n".join(lines)
+    title = "MWS 续期报告 ({})".format(now_str())
+    if failed == 0:
+        content = "总计 {} 项，全部续期成功。".format(total)
+    else:
+        reasons = "；".join(dict.fromkeys(failure_reasons))
+        content = ("总计 {} 项，成功 {} 项，失败 {} 项。\n"
+                   "失败原因：{}。".format(total, success, failed, reasons))
+        if any("验证码" in r for r in failure_reasons):
+            content += "\n下一步：打开 https://cloud.m-ws.cc/ 手动续期。"
     print("\n" + title + "\n" + content)
     _report(
         level,
