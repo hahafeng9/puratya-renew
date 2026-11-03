@@ -101,7 +101,7 @@ def main():
     # 0) 验证 token 有效性
     status, body = http("/auth/me", token=token)
     if status == 401:
-        title = "MWS token 已失效 ({})".format(now_str())
+        title = "🔑 MWS token 已失效 ({})".format(now_str())
         content = ("请重新登录 cloud.m-ws.cc，F12 抓取 __Host-mrtcloud_token，"
                    "更新到 GitHub Secret MWS_TOKEN")
         print(title)
@@ -119,9 +119,9 @@ def main():
     # 1) 拉取并续期
     items = collect(token)
     if not items:
-        title = "MWS 续期报告 ({})".format(now_str())
+        title = "🔄 MWS 续期报告 ({})".format(now_str())
         print(title)
-        _report("success", title, "账号下没有 Bot / Site，跳过。", None)
+        _report("success", title, "📭 账号下没有 Bot / Site，跳过。", None)
         return
     failed = 0
     detail_items = []
@@ -153,15 +153,15 @@ def main():
     total = len(items)
     success = total - failed
     level = "success" if failed == 0 else "partial"
-    title = "MWS 续期报告 ({})".format(now_str())
+    title = "🔄 MWS 续期报告 ({})".format(now_str())
     if failed == 0:
-        content = "总计 {} 项，全部续期成功。".format(total)
+        content = "✅ 总计 {} 项，全部续期成功。".format(total)
     else:
         reasons = "；".join(dict.fromkeys(failure_reasons))
-        content = ("总计 {} 项，成功 {} 项，失败 {} 项。\n"
-                   "失败原因：{}。".format(total, success, failed, reasons))
+        content = ("📊 总计 {} 项，成功 {} 项，失败 {} 项。\n"
+                   "⚠️ 失败原因：{}。".format(total, success, failed, reasons))
         if any("验证码" in r for r in failure_reasons):
-            content += "\n下一步：打开 https://cloud.m-ws.cc/ 手动续期。"
+            content += "\n👉 下一步：打开 https://cloud.m-ws.cc/ 手动续期。"
     print("\n" + title + "\n" + content)
     _report(
         level,
